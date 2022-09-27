@@ -10,6 +10,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     {
         serviceCollection.AddSingleton<Plugin>();
         serviceCollection.AddSingleton<BangumiApi>();
+        serviceCollection.AddSingleton<PluginDatabase>();
         serviceCollection.AddSingleton<OAuthStore>();
     }
 }
