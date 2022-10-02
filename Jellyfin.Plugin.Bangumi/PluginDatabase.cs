@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using Jellyfin.Plugin.Bangumi.Model;
+using Jellyfin.Plugin.Bangumi.OAuth;
 using LiteDB;
 using MediaBrowser.Common.Configuration;
 
@@ -12,6 +13,8 @@ public class PluginDatabase : IDisposable
 
     public ILiteCollection<Episode> Episodes;
 
+    public ILiteCollection<OAuthUser> Logins;
+
     public ILiteCollection<Person> Persons;
 
     public ILiteCollection<Subject> Subjects;
@@ -19,6 +22,8 @@ public class PluginDatabase : IDisposable
     public PluginDatabase(IApplicationPaths paths)
     {
         _database = new LiteDatabase(Path.Join(paths.ProgramDataPath, "bangumi.db"));
+
+        Logins = _database.GetCollection<OAuthUser>();
 
         Subjects = _database.GetCollection<Subject>();
 
