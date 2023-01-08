@@ -1,10 +1,12 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Text.Json.Serialization;
-using Fastenshtein;
 using Jellyfin.Plugin.Bangumi.Configuration;
+#if !EMBY
+using System;
+using Fastenshtein;
+#endif
 
 namespace Jellyfin.Plugin.Bangumi.Model;
 
@@ -36,7 +38,7 @@ public class Subject
     public string? AirDate => Date ?? Date2;
 
     [JsonIgnore]
-    public string? ProductionYear => AirDate?[..4];
+    public string? ProductionYear => AirDate?.Substring(0, 4);
 
     public Dictionary<string, string>? Images { get; set; }
 
@@ -66,7 +68,7 @@ public class Subject
     {
         return configuration?.TranslationPreference switch
         {
-            TranslationPreferenceType.Chinese => string.IsNullOrEmpty(ChineseName) ? OriginalName : ChineseName,
+            TranslationPreferenceType.Chinese => string.IsNullOrEmpty(ChineseName) ? OriginalName : ChineseName!,
             TranslationPreferenceType.Original => OriginalName,
             _ => OriginalName
         };
@@ -74,6 +76,9 @@ public class Subject
 
     public static List<Subject> SortBySimilarity(IEnumerable<Subject> list, string keyword)
     {
+#if EMBY
+        return list
+#else
         var instance = new Levenshtein(keyword);
         return list
             .OrderBy(subject =>
@@ -82,6 +87,7 @@ public class Subject
                     instance.DistanceFrom(subject.OriginalName)
                 )
             )
+#endif
             .ToList();
     }
 }

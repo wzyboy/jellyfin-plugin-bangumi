@@ -2,41 +2,19 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Bangumi.Model;
-using Jellyfin.Plugin.Bangumi.OAuth;
-using MediaBrowser.Common.Net;
 using MediaBrowser.Controller.Entities;
 using JellyfinPersonType = MediaBrowser.Model.Entities.PersonType;
 
 namespace Jellyfin.Plugin.Bangumi;
 
-public class BangumiApi
+public partial class BangumiApi
 {
     private const int PageSize = 50;
     private const int Offset = 20;
-
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
-
-    private readonly IHttpClientFactory _httpClientFactory;
-
-    private readonly Plugin _plugin;
-    private readonly OAuthStore _store;
-
-    public BangumiApi(IHttpClientFactory httpClientFactory, OAuthStore store)
-    {
-        _plugin = Plugin.Instance!;
-        _httpClientFactory = httpClientFactory;
-        _store = store;
-    }
 
     public Task<List<Subject>> SearchSubject(string keyword, CancellationToken token)
     {
@@ -97,7 +75,7 @@ public class BangumiApi
             if (result == null)
                 return initialResult.Data;
         }
-        catch (HttpRequestException e)
+        catch (ServerException e)
         {
             // bad request: offset is out of range
             if (e.StatusCode == HttpStatusCode.BadRequest)
@@ -134,19 +112,7 @@ public class BangumiApi
     {
         var result = new List<PersonInfo>();
         var characters = await SendRequest<List<RelatedCharacter>>($"https://api.bgm.tv/v0/subjects/{id}/characters", token);
-        characters?.ForEach(character =>
-        {
-            if (character.Actors == null)
-                return;
-            result.AddRange(character.Actors.Select(actor => new PersonInfo
-            {
-                Name = actor.Name,
-                Role = character.Name,
-                ImageUrl = actor.DefaultImage,
-                Type = JellyfinPersonType.Actor,
-                ProviderIds = new Dictionary<string, string> { { Constants.ProviderName, $"{actor.Id}" } }
-            }));
-        });
+        characters?.ForEach(character => result.AddRange(character.ToPersonInfos()));
         return result;
     }
 
@@ -159,25 +125,10 @@ public class BangumiApi
     {
         var result = new List<PersonInfo>();
         var persons = await GetSubjectPersons(id, token);
-        persons?.ForEach(person =>
-        {
-            var item = new PersonInfo
-            {
-                Name = person.Name,
-                ImageUrl = person.DefaultImage,
-                Type = person.Relation switch
-                {
-                    "导演" => JellyfinPersonType.Director,
-                    "制片人" => JellyfinPersonType.Producer,
-                    "系列构成" => JellyfinPersonType.Composer,
-                    "脚本" => JellyfinPersonType.Writer,
-                    _ => ""
-                },
-                ProviderIds = new Dictionary<string, string> { { Constants.ProviderName, $"{person.Id}" } }
-            };
-            if (!string.IsNullOrEmpty(item.Type))
-                result.Add(item);
-        });
+        persons?.Select(person => person.ToPersonInfo())
+            .Where(personInfo => personInfo != null)
+            .ToList()
+            .ForEach(personInfo => result.Add(personInfo!));
         return result;
     }
 
@@ -189,71 +140,5 @@ public class BangumiApi
     public async Task<PersonDetail?> GetPerson(int id, CancellationToken token)
     {
         return await SendRequest<PersonDetail>($"https://api.bgm.tv/v0/persons/{id}", token);
-    }
-
-    public async Task<User?> GetAccountInfo(string accessToken, CancellationToken token)
-    {
-        return await SendRequest<User>("https://api.bgm.tv/v0/me", accessToken, token);
-    }
-
-    public async Task UpdateCollectionStatus(string accessToken, int subjectId, CollectionType type, CancellationToken token)
-    {
-        var request = new HttpRequestMessage(HttpMethod.Patch, $"https://api.bgm.tv/v0/users/-/collections/{subjectId}");
-        request.Content = new JsonContent(new Collection { Type = type });
-        await SendRequest(request, accessToken, token);
-    }
-
-    public async Task UpdateEpisodeStatus(string accessToken, int subjectId, int episodeId, EpisodeCollectionType status, CancellationToken token)
-    {
-        var request = new HttpRequestMessage(HttpMethod.Patch, $"https://api.bgm.tv/v0/users/-/collections/{subjectId}/episodes");
-        request.Content = new JsonContent(new EpisodesCollectionInfo
-        {
-            EpisodeIdList = new List<int> { episodeId },
-            Type = status
-        });
-        await SendRequest(request, accessToken, token);
-    }
-
-    private Task<string> SendRequest(string url, string? accessToken, CancellationToken token)
-    {
-        return SendRequest(new HttpRequestMessage(HttpMethod.Get, url), accessToken, token);
-    }
-
-    private async Task<string> SendRequest(HttpRequestMessage request, string? accessToken, CancellationToken token)
-    {
-        var httpClient = GetHttpClient();
-        if (!string.IsNullOrEmpty(accessToken))
-            request.Headers.Authorization = AuthenticationHeaderValue.Parse("Bearer " + accessToken);
-        using var response = await httpClient.SendAsync(request, token);
-        if (!response.IsSuccessStatusCode) await ServerException.ThrowFrom(response);
-        return await response.Content.ReadAsStringAsync(token);
-    }
-
-    private async Task<T?> SendRequest<T>(string url, CancellationToken token)
-    {
-        return await SendRequest<T>(url, _store.GetAvailable()?.AccessToken, token);
-    }
-
-    private async Task<T?> SendRequest<T>(string url, string? accessToken, CancellationToken token)
-    {
-        var jsonString = await SendRequest(url, accessToken, token);
-        return JsonSerializer.Deserialize<T>(jsonString, Options);
-    }
-
-    public HttpClient GetHttpClient()
-    {
-        var httpClient = _httpClientFactory.CreateClient(NamedClient.Default);
-        httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Jellyfin.Plugin.Bangumi", _plugin.Version.ToString()));
-        httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("(https://github.com/kookxiang/jellyfin-plugin-bangumi)"));
-        httpClient.Timeout = TimeSpan.FromMilliseconds(_plugin.Configuration.RequestTimeout);
-        return httpClient;
-    }
-
-    private class JsonContent : StringContent
-    {
-        public JsonContent(object obj) : base(JsonSerializer.Serialize(obj, Options), Encoding.UTF8, "application/json")
-        {
-            Headers.ContentType!.CharSet = null;
-        }
     }
 }
